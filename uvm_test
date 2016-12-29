@@ -1,0 +1,225 @@
+/this code recorders what need to be noted in UMV 
+
+interface vi_if (input logic clk);
+  //port type(input and output)
+  clocking cb @(posedge clk);//a clock domain,there could be multiply clock domain in module
+     //sychronous signal corresponding to clock used in verification platform
+     
+  endclocking
+endinterface
+
+ class transaction extends uvm_sequence_item;
+ `uvm_object_utils(transaction)
+  //data_type
+  //constraint
+    
+ 
+ function new(string name="",uvm_component parent=null);
+   super.new(name,parent);
+ endfunction
+
+ //task/function below used to practice data 
+ //we can do printf,copy, carculate,comparation 
+ //the conmunication between components is based on transaction
+ 
+ //compare
+ virtual function bit compare(transaction tr);  
+      compare=(data=tr.data&&);
+endfunction
+
+ //copy()
+ virtual function transaction copy(transaction tr);
+   copy.data=data;
+   //   .
+   //   .
+   //   .
+   //   .
+endfunction 
+endclass
+
+//function coverage
+covergroup namegroup(ref );
+   a:coverpoint tr.a{bins XXX={};
+                     bins XXXX={};
+                     option.auto_bin_max=2;}
+   b:coverpoint tr.b{bins xxxxx={};
+                     bins XXXXXX={};}
+   ab:cross a,b{bins a_1=binsof()&&binsof();
+             bins b_1=binsof()intersect{}&&binsof()intersect{}};
+endgroup
+
+//不同的测试平台，在不更改原始类的情况下，对类进行扩展，注入错误、约束，通过回调、蓝图的手段
+//use different callback function due to testbench
+// handle of transaction can point to object of class which extends transaction class
+//
+class transaction_child extends transaction;
+    bit seq;
+  
+  virtual function transaction copy(transantion tr);
+    transaction_child bad;
+    if(tr=null)
+        bad=new();
+    else 
+       $cast(bad,tr);
+    
+    bad.data=data;
+    bad.seq=seq;
+    return bad;
+endfunction  
+endclass 
+
+class my_sequence extends uvm_sequence #(transaction);
+   transaction tr;
+   function new(string name="");
+     super.new(name);
+   endfunction
+   
+   virtual task body();
+     repeat()
+       begin
+          `uvm_do(tr);
+       end
+   endtask
+   
+   `uvm_object_utils(my_sequence);
+endclass
+
+class sequencer extends uvm_sequencer #(transaction);
+   function new(string name,uvm_component parent);
+     super.new(name,parent);
+   endfunction
+   
+   virtual task main_phase(uvm_phase phase);
+     my_sequence seq;
+     phase.raise_objection(this);
+     seq=my_sequence::type_id::create("seq");
+     seq.start(this);//如果在环境里面启动sequence的话，seq.start(iag.sqr)
+     phase.drop_objection(this);  
+   endtask
+ 
+   `uvm_component_utils(sequencer)
+endclass
+
+
+//component::driver
+ class driver extends uvm_driver #(transaction);
+ `uvm_component_utils(driver)
+   transaction tr;
+  virtual vi_if input_if;
+ function new(string name="driver",uvm_component parent=null);
+   super.new(name,parent);
+ endfunction
+ 
+ function void build_phase(uvm_phase phase);
+   super.build_phase(phase);
+   //get input_interface from top_tb and send it to virtual interface
+   if(!uvm_config_db#(virtual vi_if)::get(this,,"input_if",input_if))
+      `uvm_fatal("driver","printf information")  
+   //get data    
+   if(!uvm_config_db#(int)::get(this,,"",))   
+      `uvm_fatal("driver","printf information")
+ endfunction
+ 
+ virtual task main_phase(uvm_phase phase) ;
+  while(1)
+   begin 
+      seq_item_port.get_next_item(req); //从sequencer中获取transaction   
+      drive_one_packet(tr);
+      seq_item_port.item_done();//通知sequencer发送完成，否则sequener重新发送一个transaction备份
+   end
+ endtask
+ 
+ virtual task drive_one_packet(transaction tr);
+ endtask
+ 
+ 
+ endclass
+ 
+//component::monitor
+ class monitor extends uvm_monitor;
+   `uvm_component_utils(monitor)
+   uvm_analysis_aport#(transaction) ap;
+   
+   transaction tr;
+    virtual vi_if input_if;
+   function new(string name="",uvm_component parent=null);
+     super.new(name,parent);
+   endfunction
+   
+   virtual function void build_phase(uvm_phase phase)
+     super.build_phase(phase);
+     if(!uvm_config_db#(virtual vi_if)::get(this,,"input_if",input_if))
+        `uvm_fatal("monitor","printf information")
+   endfunction
+   
+   virtual task build_phase(phase);
+     //collect data and put it in a class object
+     
+     ap.write(tr);
+   endtask
+ endclass 
+
+//component::agent
+ class agent extends uvm_agent;
+   `uvm_component_utils(agent)
+   driver drv;
+   monitor mon;
+   sequencer sqr;
+   uvm_analysis_port#(transacntion) ap;
+   function new(string name="",uvm_component parent=null);
+     super.new(name,parent) 
+   endfunction
+   
+   virtual function void build_phase(uvm_phase phase)
+     super.build_phase(phase);
+     uvm_config_db#(uvm_active_passive_enum)::get(this,"","is_active",is_active);
+     if(is_active==UVM_ACTIVE)
+        begin
+          drv=driver::type_id::create("drv",this);
+          sqr=sequencer::type_id::create("sqr",this);
+        end 
+       mon=monitor::type_id::create("mon",this);
+   endfunction
+   
+   virtual function void connect_phase(uvm_phase phase);
+     super.connect_phase(phase); 
+     if(is_active=UVM_ACTIVE)
+       begin
+          drv.seq_item_port.connect(sqr.seq_item_export);//将driver的seq_item_port和sequencer的seq_item_export通过
+       end  
+       ap=mon.ap;
+     endfunction
+   
+ endclass 
+ 
+//component::env
+class env extends uvm_env;
+   `uvm_component_utils(env)
+   agent in_agent;
+   agent out_agent;
+   refrence_modle mdl;
+   checker chk;
+   uvm_tlm_analysis_fifo #(transactin) agt_mdl_fifo;
+   uvm_tlm_analysis_fifo #(transactin) mdl_chk_fifo;
+   uvm_tlm_analysis_fifo #(transactin) agt_chk_fifo;
+   
+   function new(string name="env",uvm_component parent=null);
+     super.new(name,parent) 
+   endfunction
+   
+   virtual function void build_phase(uvm_phase phase);
+     super.build_phase(phase);
+     agt_mdl_fifo=new("agt_mdl_fifo",this);
+     uvm_config_db#(uvm_active_passive_enum)::set(this,"in_agent","is_active",UVM_ACTIVE);
+     uvm_config_db#(uvm_active_passive_enum)::set(this,"out_agent","is_active",UVM_PASSIVE);
+     in_agent=agent::type_id::create("in_agent",this);
+     out_agent=agent::type_id::create("out_agent",this);
+   endfunction
+   
+   function void connect_phase(uvm_phase phase);     //在验证环境的build_phase里面，不仅要对组件进行例化
+     super.connect_phase(phase);                     //还要对连接fifo进行例化，同时在connect_phase中
+     in_agent.ap.connect(agt_mdl_fifo.analysis_port);//将端口相连。
+     mdl.port.connect(agt_mdl_fifo.blocking_get_port); 
+ endfunction
+   
+endclass 
